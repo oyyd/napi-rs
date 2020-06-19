@@ -17,6 +17,7 @@ mod call_context;
 pub mod sys;
 mod task;
 mod version;
+pub mod threadsafe_function;
 
 pub use call_context::CallContext;
 pub use sys::{napi_valuetype, Status};

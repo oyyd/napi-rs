@@ -5,8 +5,11 @@ extern crate napi_rs_derive;
 
 use napi::{
   Any, Boolean, CallContext, Env, Error, JsString, Number, Object, Result, Status, Task, Value,
+  Undefined, Function,
+  threadsafe_function
 };
 use std::convert::TryInto;
+use std::thread;
 
 register_module!(test_module, init);
 
@@ -24,15 +27,17 @@ fn init(env: &Env, exports: &mut Value<Object>) -> Result<()> {
     "testObjectIsDate",
     env.create_function("testObjectIsDate", test_object_is_date)?,
   )?;
-
   exports.set_named_property(
     "createExternal",
     env.create_function("createExternal", create_external)?,
   )?;
-
   exports.set_named_property(
     "getExternalCount",
     env.create_function("getExternalCount", get_external_count)?,
+  )?;
+  exports.set_named_property(
+    "testThreadsafeFunction",
+    env.create_function("testThreadsafeFunction", test_threadsafe_function)?
   )?;
   Ok(())
 }
@@ -57,6 +62,22 @@ impl Task for ComputeFib {
 
   fn resolve(&self, env: &mut Env, output: Self::Output) -> Result<Value<Self::JsValue>> {
     env.create_uint32(output)
+  }
+}
+
+#[derive(Clone, Copy)]
+struct ThreadHandleJs;
+
+impl threadsafe_function::ToJs for ThreadHandleJs {
+  type Output = u8;
+  type JsValue = Number;
+
+  fn resolve(&self, env: &mut Env, output: &mut Self::Output) -> Result<(u64, Value<Self::JsValue>)> {
+    let argv: u64 = 1;
+
+    let value = env.create_uint32(*output as u32).unwrap();
+
+    Ok((argv, value))
   }
 }
 
@@ -111,4 +132,25 @@ fn get_external_count(ctx: CallContext) -> Result<Value<Number>> {
   let attached_obj = ctx.get::<Object>(0)?;
   let native_object = ctx.env.get_value_external::<NativeObject>(&attached_obj)?;
   ctx.env.create_int32(native_object.count)
+}
+
+#[js_function(1)]
+fn test_threadsafe_function(ctx: CallContext) -> Result<Value<Undefined>> {
+  let func: Value<Function> = ctx.get::<Function>(0)?;
+
+  let to_js = ThreadHandleJs;
+
+  let mut tsfn = threadsafe_function::ThreadsafeFunction::create(*ctx.env, func, to_js)?;
+
+  thread::spawn(move || {
+    let output: u8 = 50;
+    // It's okay to call a threadsafe function multiple times.
+    tsfn.call(output).unwrap();
+    tsfn.call(output).unwrap();
+    tsfn.release(
+      threadsafe_function::napi_threadsafe_function_release_mode::napi_tsfn_release
+    );
+  });
+
+  Ok(Env::get_undefined(ctx.env)?)
 }
